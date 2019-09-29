@@ -1,0 +1,35 @@
+###################################################
+#
+# Makefile
+# Simple example for cryptodev-linux
+#
+# Stefanos Gerangelos <sgerag@cslab.ece.ntua.gr>
+# Vangelis Koukis <vkoukis@cslab.ece.ntua.gr>
+#
+###################################################
+
+CC = gcc
+
+CRYPTODEVDIR=$(HOME)/ask3/virtio-crypto-helpcode-20180430/cryptodev/cryptodev-linux-1.9
+
+CFLAGS = -Wall -I$(CRYPTODEVDIR)
+CFLAGS += -g
+# CFLAGS += -O2 -fomit-frame-pointer -finline-functions
+
+LIBS = 
+
+BINS = crypto-test socket-crypto-chat-server socket-crypto-chat-client
+
+all: $(BINS)
+
+crypto-test: crypto-test.c
+	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
+
+server: socket-crypto-chat-server.c socket-common.h
+	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
+
+client: socket-crypto-chat-client.c socket-common.h
+	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
+
+clean:
+	rm -f *.o *~ $(BINS)

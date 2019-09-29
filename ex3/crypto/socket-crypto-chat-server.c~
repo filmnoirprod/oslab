@@ -1,0 +1,292 @@
+/*
+ * socket-server.c
+ * Simple TCP/IP communication using sockets
+ *
+ * Vangelis Koukis <vkoukis@cslab.ece.ntua.gr>
+ */
+
+#include <stdio.h>
+#include <errno.h>
+#include <ctype.h>
+#include <string.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <unistd.h>
+#include <netdb.h>
+#include <fcntl.h>
+
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+
+#include <crypto/cryptodev.h>
+
+#include "socket-common.h"
+
+#define DATA_SIZE       256
+#define BLOCK_SIZE      16
+#define KEY_SIZE	16  /* AES128 */
+
+/* Convert a buffer to upercase */
+void toupper_buf(char *buf, size_t n)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		buf[i] = toupper(buf[i]);
+}
+
+/* Insist until all of the data has been written */
+ssize_t insist_write(int fd, const void *buf, size_t cnt)
+{
+	ssize_t ret;
+	size_t orig_cnt = cnt;
+	
+	while (cnt > 0) {
+	        ret = write(fd, buf, cnt);
+	        if (ret < 0)
+	                return ret;
+	        buf += ret;
+	        cnt -= ret;
+	}
+
+	return orig_cnt;
+}
+
+int main(void)
+{
+	unsigned char buf[DATA_SIZE];
+	char addrstr[INET_ADDRSTRLEN];
+	int sd, newsd, max_sd, i;
+	ssize_t n;
+	socklen_t len;
+	struct sockaddr_in sa;
+        
+        //sdaset of socket descriptors we want to read waking up with select
+        fd_set readfds;
+        
+        int cfd;//file descriptor for use of crypto_dev char 
+	struct session_op sess;
+	struct crypt_op cryp;
+        unsigned char iv[BLOCK_SIZE] = "7297c5c85fb0b5c9";//initialization vector
+        unsigned char key[KEY_SIZE] = "0b51cec98fa03f0c";//encryption key       
+        unsigned char encrypted[DATA_SIZE];//encrypted data
+        unsigned char decrypted[DATA_SIZE];//decrypted data
+        
+	memset(&sess, 0, sizeof(sess));
+	memset(&cryp, 0, sizeof(cryp));
+        
+	
+	/* Make sure a broken connection doesn't kill us */
+	signal(SIGPIPE, SIG_IGN);
+
+	/* Create TCP/IP socket, used as main chat channel */
+	if ((sd = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
+		perror("socket");
+		exit(1);
+	}
+	fprintf(stderr, "Created TCP socket\n");
+        
+
+	/* Bind to a well-known port */
+	memset(&sa, 0, sizeof(sa));
+	sa.sin_family = AF_INET;
+	sa.sin_port = htons(TCP_PORT);
+	sa.sin_addr.s_addr = htonl(INADDR_ANY);
+	if (bind(sd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+		perror("bind");
+		exit(1);
+	}
+	fprintf(stderr, "Bound TCP socket to port %d\n", TCP_PORT);
+
+	/* Listen for incoming connections */
+	if (listen(sd, TCP_BACKLOG) < 0) {
+		perror("listen");
+		exit(1);
+	}
+
+	/* Loop forever, accepting connections*/
+	for (;;) {
+
+		fprintf(stderr, "Waiting for an incoming connection...\n");
+
+		/* Accept an incoming connection */
+		len = sizeof(struct sockaddr_in);
+		if ((newsd = accept(sd, (struct sockaddr *)&sa, &len)) < 0) {
+			perror("accept");
+			exit(1);
+		}
+		if (!inet_ntop(AF_INET, &sa.sin_addr, addrstr, sizeof(addrstr))) {
+			perror("could not format IP address");
+			exit(1);
+		}
+		
+                /*Try to open crypto_dev*/
+                cfd = open("/dev/cryptodev0", O_RDWR);
+                if (cfd < 0) {
+                        perror("open(/dev/crypto)");
+                        return 1;
+                }
+                
+                /*
+                * Get crypto session for AES128
+                */
+                sess.cipher = CRYPTO_AES_CBC;
+                sess.keylen = KEY_SIZE;
+                sess.key = key;
+
+                if (ioctl(cfd, CIOCGSESSION, &sess)) {
+                    perror("ioctl(CIOCGSESSION)");
+                    return 1;
+                }
+		fprintf(stderr, "Incoming connection from %s:%d\n\nStarting new encrypted session...\n",
+			addrstr, ntohs(sa.sin_port)); fflush(stderr);
+                
+                
+		/* We break out of the loop when the remote peer goes away */
+		for (;;) {
+                    
+                    //clear the socket set
+                    FD_ZERO(&readfds);
+    
+                    //add stdin socket to set: STDIN_FILENO = 0
+                    FD_SET(STDIN_FILENO, &readfds);
+                    //add client socket to set
+                    FD_SET(newsd, &readfds);
+                    
+                    if (newsd>sd) 
+                        max_sd = newsd;
+                    else
+                        max_sd = sd;
+                    
+                    //wait for an activity on one of the sockets , timeout is NULL, so wait indefinitely
+                    if(select(max_sd + 1 , &readfds , NULL , NULL , NULL) < 0){
+                        perror("select");
+                        exit(1);
+                    }
+                    
+                    /*wake up when something happened*/
+                    if (FD_ISSET(newsd, &readfds)){
+                        /*read message from remote client*/
+			n = read(newsd, buf, sizeof(buf));
+			if (n <= 0) {
+				if (n < 0)
+					perror("read from remote peer failed");
+				else
+					fprintf(stderr, "Peer went away\n");
+				break;
+			}
+			
+//                         /*
+//                         * Get crypto session for AES128
+//                         */
+//                         sess.cipher = CRYPTO_AES_CBC;
+//                         sess.keylen = KEY_SIZE;
+//                         sess.key = key;
+// 
+//                         if (ioctl(cfd, CIOCGSESSION, &sess)) {
+//                             perror("ioctl(CIOCGSESSION)");
+//                             return 1;
+//                         }
+// 			
+			/*
+                         * Decrypt message from buf to decrypted[]
+                         */
+                        cryp.ses = sess.ses;
+                        cryp.len = sizeof(buf);
+                        cryp.src = buf;
+                        cryp.dst = decrypted;
+                        cryp.iv = iv;
+                        cryp.op = COP_DECRYPT;
+                        
+                        if (ioctl(cfd, CIOCCRYPT, &cryp)) {
+                            perror("ioctl(CIOCCRYPT)");
+                            return 1;
+                        }
+			
+			i=0;
+                        while (decrypted[i] != '\n') i++;
+                         
+                        /*write message to stdout*/
+                        fprintf(stdout, "\nFriend:\n");
+                        fflush(stdout);                        
+			if (insist_write(0, decrypted, i+1) != i+1) {
+				perror("write incoming message failed");
+				break;
+			}
+			
+                        fprintf(stdout, "\n"); fflush(stdout);
+                    }
+                    else if (FD_ISSET(STDIN_FILENO, &readfds)){
+                        /*read message from stdin and send it*/
+                        n = read(0, buf, sizeof(buf));
+			if (n < 0) {
+                            perror("read from stdin failed");
+                            break;
+			}
+			buf[sizeof(buf) - 1] = '\0';
+			
+			fprintf(stdout, ":Me\n");
+                        fflush(stdout);
+                        
+// /*                        
+//                         /*
+//                         * Get crypto session for AES128
+//                         */
+//                         sess.cipher = CRYPTO_AES_CBC;
+//                         sess.keylen = KEY_SIZE;
+//                         sess.key = key;
+// 
+//                         if (ioctl(cfd, CIOCGSESSION, &sess)) {
+//                             perror("ioctl(CIOCGSESSION)");
+//                             return 1;
+//                         }*/
+                            
+                        /*
+                         * Encrypt buf data to encrypted[]
+                         */
+                        cryp.ses = sess.ses;
+                        cryp.len = sizeof(buf);
+                        cryp.src = buf;
+                        cryp.dst = encrypted;
+                        cryp.iv = iv;
+                        cryp.op = COP_ENCRYPT;
+
+                        if (ioctl(cfd, CIOCCRYPT, &cryp)) {
+                            perror("ioctl(CIOCCRYPT)");
+                            return 1;
+                        }
+                        
+                        /*send encrypted message to remote client*/
+			if (insist_write(newsd, encrypted, sizeof(encrypted)) != sizeof(encrypted)) {
+				perror("write to remote client failed");
+				break;
+			}
+                    }
+		}
+                /* Finish crypto session */
+                if (ioctl(cfd, CIOCFSESSION, &sess.ses)) {
+                    perror("ioctl(CIOCFSESSION)");
+                    return 1;
+                }
+		
+		if (close(cfd) < 0) {
+                    perror("close(fd)");
+                    return 1;
+                }
+                
+		/* Make sure we don't leak open files */
+		if (close(newsd) < 0)
+			perror("close");
+        }
+
+	/* This will never happen */
+	return 1;
+}
+

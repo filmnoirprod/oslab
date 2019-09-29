@@ -1,0 +1,1 @@
+cmd_/home/user/host1/virtio-crypto/guest/virtio_crypto.o := ld -m elf_x86_64   -r -o /home/user/host1/virtio-crypto/guest/virtio_crypto.o /home/user/host1/virtio-crypto/guest/crypto-module.o /home/user/host1/virtio-crypto/guest/crypto-chrdev.o 

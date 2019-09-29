@@ -1,0 +1,9 @@
+policy:kati:cpu:900
+policy:katiallo:cpu:900
+policy:katiallo12:cpu:100
+policy:kati1:cpu:900
+policy:katiallo1:cpu:900
+policy:katiallo11:cpu:113
+policy:sda:cpu:132
+policy:dsaw:cpu:10
+policy:was:cpu:92

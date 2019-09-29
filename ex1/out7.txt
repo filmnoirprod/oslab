@@ -1,0 +1,5 @@
+policy:kati:cpu:1900
+policy:katiallo:cpu:1900
+
+
+
